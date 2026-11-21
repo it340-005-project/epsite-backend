@@ -1,0 +1,11 @@
+[Unit]
+Description=Exotic Pets API
+After=network.target
+
+[Service]
+WorkingDirectory=/srv/epsite-backend
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
