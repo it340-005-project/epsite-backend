@@ -29,7 +29,61 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
+  connectTimeout: 4000,
 });
+pool.pool.on("error", (err) => {
+  console.error("database pool error", err && err.message);
+});
+
+const DATABASE_DOWN = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "EPIPE",
+  "EAI_AGAIN",
+  "PROTOCOL_CONNECTION_LOST",
+  "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR",
+  "PROTOCOL_ENQUEUE_AFTER_QUIT",
+  "ER_ACCESS_DENIED_ERROR",
+  "ER_BAD_DB_ERROR",
+  "ER_DBACCESS_DENIED_ERROR",
+  "ER_CON_COUNT_ERROR",
+  "ER_BAD_HOST_ERROR",
+  "ER_HOST_NOT_PRIVILEGED",
+  "ER_HOST_IS_BLOCKED",
+  "POOL_CLOSED",
+  "POOL_ENQUEUELIMIT",
+]);
+
+function isDatabaseDown(err) {
+  if (!err || typeof err !== "object") return false;
+  if (DATABASE_DOWN.has(err.code)) return true;
+  if (Array.isArray(err.errors) && err.errors.some(isDatabaseDown)) return true;
+  if (err.cause) return isDatabaseDown(err.cause);
+  return false;
+}
+
+function databaseMessage(path) {
+  if (path === "/B_getproducts" || path === "/B_addtocart") {
+    return "Animals for sale are not available.";
+  }
+  if (
+    path === "/B_status" ||
+    path === "/B_login" ||
+    path === "/B_register" ||
+    path === "/B_mfa_setup" ||
+    path === "/B_mfa_verify" ||
+    path === "/B_session" ||
+    path === "/B_account" ||
+    path === "/B_mfa_reset" ||
+    path === "/B_mfa_reset_confirm"
+  ) {
+    return "Signing in is not available.";
+  }
+  return "This is not available right now.";
+}
 
 const app = express();
 app.disable("x-powered-by");
@@ -40,6 +94,34 @@ app.use(session({
   saveUninitialized: true,
   cookie: { httpOnly: true, sameSite: "lax", secure: false },
 }));
+
+function handle(handler) {
+  return (req, res, next) => {
+    Promise.resolve()
+      .then(() => handler(req, res, next))
+      .catch((err) => {
+        if (!isDatabaseDown(err)) {
+          next(err);
+          return;
+        }
+        console.error("database unavailable", err.code || err.message);
+        if (res.headersSent) return;
+        res.status(503).json({
+          success: false,
+          unavailable: "database",
+          message: databaseMessage(req.path),
+        });
+      });
+  };
+}
+
+for (const method of ["get", "post", "put", "delete"]) {
+  const original = app[method].bind(app);
+  app[method] = (path, ...handlers) => {
+    if (handlers.length === 0) return original(path);
+    return original(path, ...handlers.map((handler) => (typeof handler === "function" ? handle(handler) : handler)));
+  };
+}
 
 function audit(req, access, action) {
   const who = req.session.userId ? String(req.session.userId) : "guest";
@@ -165,6 +247,7 @@ app.post("/B_register", async (req, res) => {
     const setup = await setupPayload(user);
     res.json({ success: true, qrCode: setup.qrCode, secret: setup.secret });
   } catch (err) {
+    if (isDatabaseDown(err)) throw err;
     if (err && err.code === "ER_DUP_ENTRY") {
       res.json({ success: false, message: "An account with that email already exists." });
       return;
@@ -295,6 +378,7 @@ app.put("/B_account", async (req, res) => {
     try {
       await pool.query("UPDATE users SET email = ? WHERE id = ?", [email, user.id]);
     } catch (err) {
+      if (isDatabaseDown(err)) throw err;
       if (err && err.code === "ER_DUP_ENTRY") {
         res.json({ success: false, message: "An account with that email already exists." });
         return;
@@ -356,6 +440,12 @@ app.post("/B_mfa_reset_confirm", async (req, res) => {
   await pool.query("UPDATE users SET mfa_secret = ?, mfa_enabled = 1 WHERE id = ?", [req.session.pendingSecret, user.id]);
   req.session.pendingSecret = null;
   res.json({ success: true });
+});
+
+app.get("/B_status", async (req, res) => {
+  audit(req, "read", "B_status");
+  await pool.query("SELECT 1");
+  res.json({ ok: true });
 });
 
 app.get("/B_getproducts", async (req, res) => {
