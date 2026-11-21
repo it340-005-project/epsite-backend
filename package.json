@@ -1,0 +1,19 @@
+{
+  "name": "exotic-pets-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API for the Exotic Pets store. Talks to MySQL and the log server.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "mysql2": "^3.11.5",
+    "otplib": "^12.0.1",
+    "qrcode": "^1.5.4"
+  }
+}
