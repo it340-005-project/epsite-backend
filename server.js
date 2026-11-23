@@ -91,7 +91,7 @@ app.use(express.json({ limit: "32kb" }));
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
-  saveUninitialized: true,
+  saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: "lax", secure: false },
 }));
 
@@ -269,7 +269,15 @@ app.post("/B_mfa_setup", async (req, res) => {
     res.json({ success: false, message: "That code was not accepted." });
     return;
   }
+  
   await pool.query("UPDATE users SET mfa_enabled = 1 WHERE id = ?", [user.id]);
+  await new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+
   req.session.userId = user.id;
   req.session.pendingUserId = null;
   req.session.pendingPurpose = null;
@@ -314,6 +322,14 @@ app.post("/B_mfa_verify", async (req, res) => {
     res.json({ success: false, message: "That code was not accepted." });
     return;
   }
+
+  await new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+
   req.session.userId = user.id;
   req.session.pendingUserId = null;
   req.session.pendingPurpose = null;
